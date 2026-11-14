@@ -41,7 +41,7 @@ solutionLink.LinkCriteria.AddCondition("uniquename", ConditionOperator.Equal, ta
 
 var results = client.RetrieveMultiple(query);
 
-List<Report> reports = new List<Report>();
+List<Report> Reports = new List<Report>();
 
 //Extract solution metadata 
 if (results.Entities.Count > 0)
@@ -135,15 +135,48 @@ foreach (var record in results.Entities)
         ColumnSet = new ColumnSet(true)
     };
 
+    if (componentTypeValue == 300)
+    {
+        try
+        {
+            Entity canvasAppMeta = client.Retrieve("canvasapp", objectId, new ColumnSet("name", "displayname", "description", "appversion"));
+
+            string appName = canvasAppMeta.GetAttributeValue<string>("name") ?? "None";
+            string appDisplayName = canvasAppMeta.GetAttributeValue<string>("displayname") ?? "None";
+            string appDescription = canvasAppMeta.GetAttributeValue<string>("description") ?? "None";
+            string appVersion = canvasAppMeta.GetAttributeValue<string>("appversion") ?? "None";
+
+            if (string.IsNullOrWhiteSpace(appDescription))
+            {
+                Reports.Add(new Report
+                {
+                    Name = appName,
+                    ComponentValue = componentName,
+                    Fix = "Canvas App needs a description."
+                });
+            }
+
+            Console.WriteLine($"App Internal Name : {appName}");
+            Console.WriteLine($"Display Name      : {appDisplayName}");
+            Console.WriteLine($"Version           : {appVersion}");
+            Console.WriteLine($"Description       : {appDescription}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error retrieving Canvas App record: {ex.Message}");
+        }
+    
+    }
+
     if (componentTypeValue == 1)
     {
-        
+
         try
         {
             var entityRequest = new RetrieveEntityRequest
             {
                 MetadataId = objectId,
-                EntityFilters = EntityFilters.Entity
+                EntityFilters = EntityFilters.Entity | EntityFilters.Attributes
             };
 
             var entityResponse = (RetrieveEntityResponse)client.Execute(entityRequest);
@@ -157,12 +190,39 @@ foreach (var record in results.Entities)
 
             if (string.IsNullOrWhiteSpace(entityDescription) || string.IsNullOrEmpty(entityDescription))
             {
-                report.Counter ++;
+                var report = new Report { Name = entityLogicalName, ComponentValue = componentName, Fix = "Needs description." };
+                Reports.Add(report);
             }
 
             Console.WriteLine($"Entity Logical Name : {entityLogicalName}");
             Console.WriteLine($"Display Name        : {entityDisplayName}");
             Console.WriteLine($"Description         : {entityDescription}");
+
+            Console.WriteLine();
+            Console.WriteLine("Custom Columns...");
+            if (entityMeta.Attributes != null)
+            {
+                foreach (var attr in entityMeta.Attributes)
+                {
+                    if (attr.IsCustomAttribute.GetValueOrDefault(false))
+                    {
+                        string attrLogicalName = attr.LogicalName;
+                        string attrDescription = attr.Description?.UserLocalizedLabel?.Label ?? string.Empty;
+
+
+                        if (string.IsNullOrEmpty(attrDescription))
+                        {
+                            Console.ForegroundColor = ConsoleColor.DarkRed;
+                            Console.WriteLine($"{attrLogicalName} - {attrDescription}");
+                            Console.ResetColor();
+                        
+                        }
+
+                    }
+                  
+                    
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -174,14 +234,28 @@ foreach (var record in results.Entities)
     
 }
 
-Console.WriteLine($"Counter of null.. {report.Counter}");
+
+Console.WriteLine();
+Console.WriteLine();
+Console.WriteLine("************************************************************");
+Console.WriteLine("Final Report");
+Console.WriteLine("************************************************************");
+
+foreach (var item in Reports)
+{
+    Console.WriteLine("------------------------------------");
+    Console.WriteLine($"{item.ComponentValue} | {item.Name}");
+    Console.WriteLine($"TODO: {item.Fix}");
+    Console.WriteLine();
+    
+}
+Console.WriteLine("------------------------------------");
+Console.WriteLine($"Count of null descriptions: {Reports.Count()}");
 
 public class Report
 {
-    public int Id { get; set; }
     public string ComponentValue { get; set; }
     public string Name { get; set; }
-    public int Counter { get; set; } = 0;
-
+    public string Fix { get; set; }
 };
 
