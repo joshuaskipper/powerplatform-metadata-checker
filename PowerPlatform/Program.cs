@@ -5,10 +5,12 @@ using Microsoft.Xrm.Sdk.Metadata;
 using Microsoft.Xrm.Sdk.Query;
 
 
+
+
 //init connection
 var connectionString =
     "AuthType=ClientSecret;" +
-    "Url=https://orgc39a0905.api.crm.dynamics.com;" +
+    $"Url={Environment.GetEnvironmentVariable("EnvironmentURL")};" +
     $"ClientId={Environment.GetEnvironmentVariable("ClientId")};" +
     $"ClientSecret={Environment.GetEnvironmentVariable("ClientSecret")}";
 
@@ -39,6 +41,8 @@ solutionLink.LinkCriteria.AddCondition("uniquename", ConditionOperator.Equal, ta
 
 var results = client.RetrieveMultiple(query);
 
+List<Report> reports = new List<Report>();
+
 //Extract solution metadata 
 if (results.Entities.Count > 0)
 {
@@ -64,8 +68,11 @@ Console.WriteLine($"Found {results.Entities.Count} objects in solution '{targetS
 
 Console.WriteLine();
 
+
+
 foreach (var record in results.Entities)
 {
+
    
     var optionSetValue = record.GetAttributeValue<OptionSetValue>("componenttype");
     var displayName = record.GetAttributeValue<string>("displayname");
@@ -119,7 +126,7 @@ foreach (var record in results.Entities)
     }
 
     Guid objectId = record.GetAttributeValue<Guid>("objectid");
-
+    Console.WriteLine("-----------------------------------------");
     Console.WriteLine($"ComponentTypeID: {componentTypeValue} | ComponentValue: {componentName} | Object ID: {objectId}");
 
     var entityQuery = new QueryExpression("entity")
@@ -127,10 +134,10 @@ foreach (var record in results.Entities)
 
         ColumnSet = new ColumnSet(true)
     };
-    Console.WriteLine("-----------------------------------------");
 
     if (componentTypeValue == 1)
     {
+        
         try
         {
             var entityRequest = new RetrieveEntityRequest
@@ -148,6 +155,11 @@ foreach (var record in results.Entities)
             string entityDisplayName = entityMeta.DisplayName?.UserLocalizedLabel?.Label ?? "None";
             string entityDescription = entityMeta.Description?.UserLocalizedLabel?.Label ?? "None";
 
+            if (string.IsNullOrWhiteSpace(entityDescription) || string.IsNullOrEmpty(entityDescription))
+            {
+                report.Counter ++;
+            }
+
             Console.WriteLine($"Entity Logical Name : {entityLogicalName}");
             Console.WriteLine($"Display Name        : {entityDisplayName}");
             Console.WriteLine($"Description         : {entityDescription}");
@@ -157,6 +169,19 @@ foreach (var record in results.Entities)
 
             Console.WriteLine($"Error retrieving entity metadata: {ex.Message}");
         }
+        
     }
     
 }
+
+Console.WriteLine($"Counter of null.. {report.Counter}");
+
+public class Report
+{
+    public int Id { get; set; }
+    public string ComponentValue { get; set; }
+    public string Name { get; set; }
+    public int Counter { get; set; } = 0;
+
+};
+
