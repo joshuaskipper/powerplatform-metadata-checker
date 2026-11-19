@@ -16,6 +16,11 @@ var connectionString =
 
 using var client = new ServiceClient(connectionString);
 
+int gradeCounter = 0;
+
+//check for connection ref in solution
+bool hasConnRef = false;
+
 //check if connection is successful
 if (!client.IsReady)
     throw new Exception(client.LastError);
@@ -62,9 +67,13 @@ if (results.Entities.Count > 0)
     Console.WriteLine($" Is Managed    : {isManaged}");
     Console.WriteLine($" Description   : {description}");
     Console.WriteLine("---------------------------------------------------");
+    // count solution descrip
+    gradeCounter++;
 }
 
 Console.WriteLine($"Found {results.Entities.Count} objects in solution '{targetSolutionUniqueName}':\n");
+
+gradeCounter += results.Entities.Count;
 
 Console.WriteLine();
 
@@ -120,6 +129,9 @@ foreach (var record in results.Entities)
         case 300:
             componentName = "Canvas App";
             break;
+        case 10088:
+            componentName = "Connection Reference";
+            break;
         default:
             componentName = $"Other / Custom Type ({componentTypeValue})";
             break;
@@ -127,7 +139,11 @@ foreach (var record in results.Entities)
 
     Guid objectId = record.GetAttributeValue<Guid>("objectid");
     Console.WriteLine("-----------------------------------------");
-    Console.WriteLine($"ComponentTypeID: {componentTypeValue} | ComponentValue: {componentName} | Object ID: {objectId}");
+
+    //ComponentTypeID: { componentTypeValue} |
+    Console.ForegroundColor = ConsoleColor.DarkYellow;
+Console.WriteLine($"ComponentValue: {componentName} | Object ID: {objectId}");
+    Console.ResetColor();
 
     var entityQuery = new QueryExpression("entity")
     {
@@ -170,6 +186,8 @@ foreach (var record in results.Entities)
 
     if (componentTypeValue == 1)
     {
+        
+        bool needsReporting = false;
 
         try
         {
@@ -188,16 +206,16 @@ foreach (var record in results.Entities)
             string entityDisplayName = entityMeta.DisplayName?.UserLocalizedLabel?.Label ?? "None";
             string entityDescription = entityMeta.Description?.UserLocalizedLabel?.Label ?? "None";
 
+            var entityReport = new Report { ComponentValue = componentName, Name = entityDisplayName, Fix = "OK" };
             if (string.IsNullOrWhiteSpace(entityDescription) || string.IsNullOrEmpty(entityDescription))
             {
-                var report = new Report { Name = entityLogicalName, ComponentValue = componentName, Fix = "Needs description." };
-                Reports.Add(report);
+                entityReport.Fix = "Table needs description.";
+                //Reports.Add(report1);
             }
 
             Console.WriteLine($"Entity Logical Name : {entityLogicalName}");
             Console.WriteLine($"Display Name        : {entityDisplayName}");
             Console.WriteLine($"Description         : {entityDescription}");
-
             Console.WriteLine();
             Console.WriteLine("Custom Columns...");
             if (entityMeta.Attributes != null)
@@ -209,19 +227,36 @@ foreach (var record in results.Entities)
                         string attrLogicalName = attr.LogicalName;
                         string attrDescription = attr.Description?.UserLocalizedLabel?.Label ?? string.Empty;
 
-
                         if (string.IsNullOrEmpty(attrDescription))
                         {
-                            Console.ForegroundColor = ConsoleColor.DarkRed;
-                            Console.WriteLine($"{attrLogicalName} - {attrDescription}");
-                            Console.ResetColor();
-                        
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            var columnReport = new Report { ComponentValue = "Column", Name = attrLogicalName, Fix = "Column needs description." };
+                            entityReport.ColumnReport.Add(columnReport);
+                            needsReporting = true;
+
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Green;
                         }
 
+                        Console.WriteLine($"{attrLogicalName} - {attrDescription}");
+                        Console.ResetColor();
                     }
                   
                     
                 }
+            }
+            // If the table description was fine, but it has missing child columns, update the fix message
+            if (string.IsNullOrWhiteSpace(entityReport.Fix) && entityReport.ColumnReport.Count > 0)
+            {
+                entityReport.Fix = "Table has missing column descriptions.";
+            }
+
+            // Add to main reports list only once if anything failed
+            if (needsReporting)
+            {
+                Reports.Add(entityReport);
             }
         }
         catch (Exception ex)
@@ -231,31 +266,78 @@ foreach (var record in results.Entities)
         }
         
     }
-    
+
+    if (componentTypeValue == 10088)
+    {
+        hasConnRef = true;
+        try
+        {
+            var connQuery = new ColumnSet(
+                "connectionreferencedisplayname",
+                "connectionid",
+                "connectionreferenceid",
+                "connectionreferencelogicalname");
+
+            Entity connRefMeta = client.Retrieve("connectionreference", objectId, connQuery);
+
+            string connDisplayName = connRefMeta.GetAttributeValue<string>("connectionreferencelogicalname") ?? "None";
+            string connectionid = connRefMeta.GetAttributeValue<string>("connectionid") ?? "None";
+            Guid connectionreferenceid = connRefMeta.GetAttributeValue<Guid>("connectionreferenceid");
+            string connectionreferencelogicalname = connRefMeta.GetAttributeValue<string>("connectionreferencelogicalname") ?? "None";
+
+
+            Console.WriteLine($"Display Name                         : {connDisplayName}");
+            Console.WriteLine($"Connection ID                        : {connectionid}");
+            Console.WriteLine($"connectionreferenceid                : {connectionreferenceid}");
+            Console.WriteLine($"connectionreferencelogicalname       : {connectionreferencelogicalname}");
+        }
+        catch (Exception ex)
+        {
+
+            Console.WriteLine($"Error: {ex}"); ;
+        }
+        
+    }
+
 }
 
 
 Console.WriteLine();
 Console.WriteLine();
+Console.ForegroundColor = ConsoleColor.DarkCyan;
 Console.WriteLine("************************************************************");
-Console.WriteLine("Final Report");
-Console.WriteLine("************************************************************");
-
-foreach (var item in Reports)
+Console.WriteLine($"Final Report: {Reports.Count} out of {gradeCounter} objects need corrections");
+if (hasConnRef)
 {
-    Console.WriteLine("------------------------------------");
-    Console.WriteLine($"{item.ComponentValue} | {item.Name}");
-    Console.WriteLine($"TODO: {item.Fix}");
-    Console.WriteLine();
-    
+    Console.WriteLine("This solution contains connection references.. ");
 }
+
+Console.WriteLine("************************************************************");
+Console.ResetColor();
+
+//foreach (var item in Reports)
+//{
+//    Console.WriteLine("------------------------------------");
+//    Console.WriteLine($"[PARENT] {item.ComponentValue} | {item.Name}");
+//    Console.WriteLine($"TODO: {item.Fix}");
+//    Console.WriteLine();
+
+//    foreach (var att in item.ColumnReport)
+//    {
+//        Console.WriteLine("------------------------------------");
+//        Console.WriteLine($"    -> [COLUMN] {att.ComponentValue} | {att.Name}");
+//        Console.WriteLine($"    -> TODO: {att.Fix}");
+//        Console.WriteLine();
+//    }
+//}
 Console.WriteLine("------------------------------------");
-Console.WriteLine($"Count of null descriptions: {Reports.Count()}");
+
 
 public class Report
 {
     public string ComponentValue { get; set; }
     public string Name { get; set; }
     public string Fix { get; set; }
+    public List<Report> ColumnReport { get; set; } = new List<Report>();
 };
 
