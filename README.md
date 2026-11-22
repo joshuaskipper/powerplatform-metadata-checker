@@ -1,0 +1,1 @@
+# PowerPlatform Metadata Checker
