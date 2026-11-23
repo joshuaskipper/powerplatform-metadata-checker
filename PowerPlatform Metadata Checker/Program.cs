@@ -142,6 +142,7 @@ foreach (var record in results.Entities)
     Console.WriteLine($"ComponentValue: {componentName} | Object ID: {objectId}");
     Console.ResetColor();
 
+    //canvas apps
     if (componentTypeValue == 300)
     {
         try
@@ -161,7 +162,8 @@ foreach (var record in results.Entities)
             {
                 Reports.Add(new Report
                 {
-                    Name = appName,
+                    Name = appDisplayName,
+                    LogicalName = appName,
                     ComponentValue = componentName,
                     Fix = "Canvas App needs a description."
                 });
@@ -177,7 +179,7 @@ foreach (var record in results.Entities)
             Console.WriteLine($"Error retrieving Canvas App record: {ex.Message}");
         }
     }
-
+    //Model Driven App
     if (componentTypeValue == 80)
     {
         try
@@ -193,6 +195,11 @@ foreach (var record in results.Entities)
             Console.WriteLine($"Name:             {mdaName}");
             Console.WriteLine($"Description:      {mdaDescription}");
 
+            if (string.IsNullOrWhiteSpace(mdaDescription) || mdaDescription == "None")
+            {
+                Reports.Add(new Report { Name = mdaName, LogicalName = mdaLogicalName, ComponentValue = "Model-Driven App", Fix = "Model-Driven App needs a description." });
+            }
+
         }
         catch (Exception ex)
         {
@@ -200,7 +207,7 @@ foreach (var record in results.Entities)
             Console.WriteLine($"Error: {ex.Message}");
         }
     }
-
+    //Tables/entitiy
     if (componentTypeValue == 1)
     {
         bool needsReporting = false;
@@ -278,7 +285,7 @@ foreach (var record in results.Entities)
             Console.WriteLine($"Error retrieving entity metadata: {ex.Message}");
         }
     }
-
+    //connection references
     if (componentTypeValue == 10088)
     {
         hasConnRef = true;
@@ -366,11 +373,17 @@ QuestPDF.Fluent.Document.Create(container =>
                 x.Item().Text("------------------------------------------------------------------------------------------------------").FontColor(Colors.BlueGrey.Medium);
                 foreach (var item in Reports)
                 {
-                    x.Item().Text($"[{item.ComponentValue.ToUpper()}] | [LOGICAL]({item.LogicalName}) - [DISPLAY]({item.Name}) — {item.Fix}").SemiBold().FontSize(9);
+                    x.Item().Text($"[{item.ComponentValue.ToUpper()}]").SemiBold().FontSize(9);
+                    x.Item().Text($"Logical Name: {item.LogicalName}").FontSize(9);
+                    x.Item().Text($"Display Name: {item.Name}").FontSize(9);
+                    x.Item().Text($"Fix: {item.Fix}").FontSize(9).FontColor(Colors.Red.Medium);
+                    //   x.Item().Text($"[{item.ComponentValue.ToUpper()}] | [LOGICAL]({item.LogicalName}) - [DISPLAY]({item.Name}) — {item.Fix}").SemiBold().FontSize(9);
                     foreach (var att in item.ColumnReport)
                     {
                         x.Item().PaddingLeft(15).Text($"[{att.ComponentValue.ToUpper()}] | {att.Name} — {att.Fix}").FontSize(9).FontColor(Colors.Red.Medium);
                     }
+                    x.Item().Text("------------------------------------------------------------------------------------------------------").FontColor(Colors.BlueGrey.Medium);
+
                 }
                 if (Reports.Count == 0)
                 {
