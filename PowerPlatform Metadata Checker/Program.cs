@@ -18,6 +18,8 @@ var connectionString =
 using var client = new ServiceClient(connectionString);
 
 int gradeCounter = 0;
+int totalChecked = 0;
+int totalIssues = 0;
 
 //check for connection ref in solution
 bool hasConnRef = false;
@@ -28,7 +30,7 @@ if (!client.IsReady)
 
 Console.Write("Solution Logical Name: ");
 
-string targetSolutionUniqueName = Console.ReadLine().ToLower();
+string targetSolutionUniqueName = (Console.ReadLine() ?? string.Empty).Trim().ToLower();
 
 var query = new QueryExpression("solutioncomponent")
 {
@@ -84,6 +86,10 @@ foreach (var record in results.Entities)
     var optionSetValue = record.GetAttributeValue<OptionSetValue>("componenttype");
     var displayName = record.GetAttributeValue<string>("displayname");
 
+
+    if (optionSetValue == null)
+        continue;
+
     var componentTypeValue = optionSetValue.Value;
 
     string componentName = "Unknown";
@@ -117,8 +123,9 @@ foreach (var record in results.Entities)
         case 62:
             componentName = "Site Map";
             break;
+        case 80:
         case 90:
-            componentName = "Plugin Type";
+            componentName = componentTypeValue == 80 ? "Model-Driven App" : "Plugin Type";
             break;
         case 200:
             componentName = "Model-Driven App";
@@ -142,11 +149,38 @@ foreach (var record in results.Entities)
     Console.WriteLine($"ComponentValue: {componentName} | Object ID: {objectId}");
     Console.ResetColor();
 
+    // web resources
+    if (componentTypeValue == 61)
+    {
+        totalChecked++;
+        Entity webResources = client.Retrieve("webresource", objectId, new ColumnSet(true));
+
+        string webRecName = webResources.GetAttributeValue<string>("name") ?? "None";
+        string webRecDisplayName = webResources.GetAttributeValue<string>("displayname") ?? "None";
+        string webRecDesc = webResources.GetAttributeValue<string>("description") ?? "None";
+
+        if (string.IsNullOrEmpty(webRecDesc) || webRecDesc.Contains("None", StringComparison.OrdinalIgnoreCase))
+        {
+            Reports.Add(new Report
+            {
+                Fix = "Add Web Resource Description",
+                LogicalName = webRecName,
+                Name = webRecDisplayName,
+                ComponentValue = "Web Resource"
+            });
+
+            Report.Counter++;
+             totalIssues++;
+            //var tes = 
+        }
+    }
+
     //canvas apps
     if (componentTypeValue == 300)
     {
         try
         {
+            totalChecked++;
             Entity canvasAppMeta = client.Retrieve("canvasapp", objectId, new ColumnSet("name", "displayname", "description", "appversion"));
 
             string appName = canvasAppMeta.GetAttributeValue<string>("name") ?? "None";
@@ -167,6 +201,10 @@ foreach (var record in results.Entities)
                     ComponentValue = componentName,
                     Fix = "Canvas App needs a description."
                 });
+
+                Report.Counter++;
+
+                totalIssues++;
             }
 
             Console.WriteLine($"App Internal Name : {appName}");
@@ -180,10 +218,11 @@ foreach (var record in results.Entities)
         }
     }
     //Model Driven App
-    if (componentTypeValue == 80)
+    if (componentTypeValue == 80 || componentTypeValue == 200)
     {
         try
         {
+            totalChecked++;
             Entity modelDrivenApp = client.Retrieve("appmodule", objectId, new ColumnSet(true));
 
 
@@ -198,6 +237,9 @@ foreach (var record in results.Entities)
             if (string.IsNullOrWhiteSpace(mdaDescription) || mdaDescription == "None")
             {
                 Reports.Add(new Report { Name = mdaName, LogicalName = mdaLogicalName, ComponentValue = "Model-Driven App", Fix = "Model-Driven App needs a description." });
+
+                Report.Counter++;
+                totalIssues++;
             }
 
         }
@@ -214,6 +256,7 @@ foreach (var record in results.Entities)
 
         try
         {
+            totalChecked++;
             var entityRequest = new RetrieveEntityRequest
             {
                 MetadataId = objectId,
@@ -235,6 +278,9 @@ foreach (var record in results.Entities)
             {
                 entityReport.Fix = "Table needs description.";
                 needsReporting = true;
+
+                Report.Counter++;
+                totalIssues++;
             }
 
             Console.WriteLine($"Entity Logical Name : {entityLogicalName}");
@@ -248,6 +294,7 @@ foreach (var record in results.Entities)
                 {
                     if (attr.IsCustomAttribute.GetValueOrDefault(false))
                     {
+                        totalChecked++;
                         string attrLogicalName = attr.LogicalName;
                         string attrDescription = attr.Description?.UserLocalizedLabel?.Label ?? string.Empty;
 
@@ -257,6 +304,8 @@ foreach (var record in results.Entities)
                             var columnReport = new Report { ComponentValue = "Column", Name = attrLogicalName, Fix = "Column needs description." };
                             entityReport.ColumnReport.Add(columnReport);
                             needsReporting = true;
+                            Report.Counter++;
+                            totalIssues++;
                         }
                         else
                         {
@@ -317,11 +366,33 @@ foreach (var record in results.Entities)
     }
 }
 
+int addAttributes = 0;
+
+foreach (var item in Reports)
+{
+    foreach (var i in item.ColumnReport)
+    {
+        addAttributes++;
+    }
+}
+
+double gradePercent = 0.0;
+if (totalChecked > 0)
+{
+    gradePercent = ((double)(totalChecked - totalIssues) / totalChecked) * 100.0;
+}
+else
+{
+    gradePercent = 100.0;
+}
+
+
 Console.WriteLine();
 Console.WriteLine();
 Console.ForegroundColor = ConsoleColor.DarkCyan;
 Console.WriteLine("************************************************************");
-Console.WriteLine($"Final Report: {Reports.Count} out of {gradeCounter} objects need corrections");
+Console.WriteLine($"Final Report: {totalIssues} out of {totalChecked} objects need corrections");
+Console.WriteLine($"Grade: {gradePercent:F1}%");
 if (hasConnRef)
 {
     Console.WriteLine("This solution contains connection references.. ");
@@ -349,45 +420,99 @@ QuestPDF.Fluent.Document.Create(container =>
 
         //page.Header()
         //    .Text("Engineering Review")
-        //    .SemiBold().FontSize(18).FontColor(Colors.BlueGrey.Medium);
+        //    .SemiBold().FontSize(18).FontColor(Colors.BlueGrey.Darken4);
 
         page.Content()
         .PaddingTop(0)
             //.PaddingVertical(1, Unit.Centimetre)
             .Column(x =>
             {
-                x.Spacing(3);
-                x.Item().Text("------------------------------------------------------------------------------------------------------").FontColor(Colors.BlueGrey.Medium);
-                x.Item().Text($" Engineering Review for: {targetSolutionUniqueName}").FontColor(Colors.BlueGrey.Medium); ;
-                x.Item().Text("------------------------------------------------------------------------------------------------------").FontColor(Colors.BlueGrey.Medium);
-                x.Item().Text($"Name:         {friendlyName}").FontColor(Colors.BlueGrey.Medium);
-                x.Item().Text($"Version:      {version}").FontColor(Colors.BlueGrey.Medium);
-                // x.Item().Text($" Is Managed    : {isManaged}");
-                x.Item().Text($"Description:  {description}").FontColor(Colors.BlueGrey.Medium);
-                if (hasConnRef)
+
+                x.Item().LineHorizontal(3f).LineColor(Colors.BlueGrey.Darken4);
+                x.Item().Text("Engineering Review").FontSize(18).Bold().FontColor(Colors.BlueGrey.Darken4);
+                x.Item().Table(meta =>
                 {
-                    x.Item().Text($"Solution Contains Connection references").FontColor(Colors.BlueGrey.Medium);
-                }
+                    meta.ColumnsDefinition(c =>
+                    {
+                        c.ConstantColumn(90);
+                        c.RelativeColumn();
+                    });
+
+                    meta.Cell().Text("Name:").FontColor(Colors.BlueGrey.Darken4);
+                    meta.Cell().Text(friendlyName).FontColor(Colors.BlueGrey.Darken4);
+
+                    meta.Cell().Text("LogicalName:").FontColor(Colors.BlueGrey.Darken4);
+                    meta.Cell().Text(targetSolutionUniqueName).FontColor(Colors.BlueGrey.Darken4);
+
+                    meta.Cell().Text("Version:").FontColor(Colors.BlueGrey.Darken4);
+                    meta.Cell().Text(version).FontColor(Colors.BlueGrey.Darken4);
+
+                    meta.Cell().Text("Description:").FontColor(Colors.BlueGrey.Darken4);
+                    meta.Cell().Text(description).FontColor(Colors.BlueGrey.Darken4);
+
+                    if (hasConnRef)
+                    {
+                        meta.Cell().Text("Connections:").FontColor(Colors.BlueGrey.Darken4);
+                        meta.Cell().Text("Solution Contains Connection references").FontColor(Colors.BlueGrey.Darken4);
+                    }
+
+                });
+                x.Item().LineHorizontal(3f).LineColor(Colors.BlueGrey.Darken4);
 
 
-                x.Item().Text("------------------------------------------------------------------------------------------------------").FontColor(Colors.BlueGrey.Medium);
+
+
+
+
+                //x.Item().LineHorizontal(1f).LineColor(Colors.BlueGrey.Darken4);
                 foreach (var item in Reports)
                 {
-                    x.Item().Text($"[{item.ComponentValue.ToUpper()}]").SemiBold().FontSize(9);
-                    x.Item().Text($"Logical Name: {item.LogicalName}").FontSize(9);
-                    x.Item().Text($"Display Name: {item.Name}").FontSize(9);
-                    x.Item().Text($"Fix: {item.Fix}").FontSize(9).FontColor(Colors.Red.Medium);
-                    //   x.Item().Text($"[{item.ComponentValue.ToUpper()}] | [LOGICAL]({item.LogicalName}) - [DISPLAY]({item.Name}) — {item.Fix}").SemiBold().FontSize(9);
-                    foreach (var att in item.ColumnReport)
+                    x.Item().PaddingTop(6).Border(0.55f).BorderColor(Colors.BlueGrey.Lighten2).Padding(8).Column(card =>
                     {
-                        x.Item().PaddingLeft(15).Text($"[{att.ComponentValue.ToUpper()}] | {att.Name} — {att.Fix}").FontSize(9).FontColor(Colors.Red.Medium);
-                    }
-                    x.Item().Text("------------------------------------------------------------------------------------------------------").FontColor(Colors.BlueGrey.Medium);
+                        //card.Spacing(2);
 
-                }
-                if (Reports.Count == 0)
-                {
-                    x.Item().Text("No issues found.");
+                        // Header bar
+                        card.Item().Row(row =>
+                        {
+                            row.RelativeItem().Text(t =>
+                            {
+                                t.Span(item.Name).Bold().FontSize(11);
+                                t.Span($"  ({item.LogicalName})").FontSize(9).FontColor(Colors.BlueGrey.Darken4);
+                            });
+                            row.AutoItem().Background(Colors.BlueGrey.Lighten5).PaddingHorizontal(5).PaddingVertical(2)
+                                .Text(item.ComponentValue.ToUpper()).FontSize(8).SemiBold();
+                        });
+
+                        // Table-level fix
+                        card.Item().Text($"Table status: {item.Fix}").FontSize(9).FontColor(Colors.Red.Darken4).SemiBold();
+
+                        // Columns 
+                        if (item.ColumnReport.Count > 0)
+                        {
+                            card.Item().PaddingTop(2).Table(table =>
+                            {
+                                table.ColumnsDefinition(c =>
+                                {
+                                    c.RelativeColumn(2);
+                                    c.RelativeColumn(3);
+                                });
+
+                                table.Header(h =>
+                                {
+                                    h.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text("Column").SemiBold().FontSize(8);
+                                    h.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text("Action Required").SemiBold().FontSize(8);
+                                });
+
+                                foreach (var att in item.ColumnReport)
+                                {
+                                    table.Cell().BorderBottom(1).BorderColor(Colors.Black).Padding(4)
+                                        .Text(att.Name).FontSize(8.5f);
+                                    table.Cell().BorderBottom(1).BorderColor(Colors.Black).Padding(4)
+                                        .Text(att.Fix).FontSize(8.5f).FontColor(Colors.Red.Darken4);
+                                }
+                            });
+                        }
+                    });
                 }
             });
 
@@ -408,5 +533,6 @@ public class Report
     public string Name { get; set; }
     public string LogicalName { get; set; }
     public string Fix { get; set; }
+    public static int Counter { get; set; } = 0;
     public List<Report> ColumnReport { get; set; } = new List<Report>();
 }
