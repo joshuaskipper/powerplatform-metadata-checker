@@ -1,4 +1,5 @@
-﻿using Microsoft.PowerPlatform.Dataverse.Client;
+﻿using Microsoft.Identity.Client;
+using Microsoft.PowerPlatform.Dataverse.Client;
 using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Messages;
 using Microsoft.Xrm.Sdk.Metadata;
@@ -6,18 +7,91 @@ using Microsoft.Xrm.Sdk.Query;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
-using System.Reflection.Metadata;
 
+
+
+
+// old auth
 //init connection
-var connectionString =
-    "AuthType=ClientSecret;" +
-    $"Url={Environment.GetEnvironmentVariable("EnvironmentURL")};" +
-    $"ClientId={Environment.GetEnvironmentVariable("ClientId")};" +
-    $"ClientSecret={Environment.GetEnvironmentVariable("ClientSecret")}";
+// var connectionString =
+//     "AuthType=ClientSecret;" +
+//     $"Url={Environment.GetEnvironmentVariable("EnvironmentURL")};" +
+//     $"ClientId={Environment.GetEnvironmentVariable("ClientId")};" +
+//     $"ClientSecret={Environment.GetEnvironmentVariable("ClientSecret")}";
 
-using var client = new ServiceClient(connectionString);
+// 
+// using var client = new ServiceClient(connectionString);
 
-int gradeCounter = 0;
+
+
+string clientId = Environment.GetEnvironmentVariable("PublicClientId");
+string environmentUrl = Environment.GetEnvironmentVariable("EnvironmentURL");
+
+var msalApp = PublicClientApplicationBuilder
+    .Create(clientId)
+    .WithAuthority(
+        "https://login.microsoftonline.com/organizations")
+    .WithDefaultRedirectUri()
+    .Build();
+async Task<string> GetAccessTokenAsync(string instanceUri)
+{
+
+    var scopes = new[]
+    {
+        $"{environmentUrl}/user_impersonation"
+    };
+
+    var accounts = await msalApp.GetAccountsAsync();
+    var account = accounts.FirstOrDefault();
+    if (account != null)
+    {
+        try
+        {
+            Console.WriteLine("Using existing Microsoft login...");
+
+            var silentResult = await msalApp
+                .AcquireTokenSilent(scopes, account)
+                .ExecuteAsync();
+
+            Console.WriteLine("Authentication successful!");
+            Console.WriteLine($"User: {silentResult.Account?.Username}");
+            Console.WriteLine($"Token expires: {silentResult.ExpiresOn.LocalDateTime}");
+            Console.WriteLine();
+
+            return silentResult.AccessToken;
+        }
+        catch (MsalUiRequiredException)
+        {
+
+        }
+    }
+
+
+    Console.WriteLine();
+    Console.WriteLine("Opening Microsoft login...");
+    Console.WriteLine();
+
+
+    var interactiveResult = await msalApp
+        .AcquireTokenInteractive(scopes)
+        .WithPrompt(Prompt.SelectAccount)
+        .ExecuteAsync();
+
+    Console.WriteLine();
+    Console.WriteLine("Authentication successful!");
+    Console.WriteLine($"User: {interactiveResult.Account?.Username}");
+    Console.WriteLine($"Token expires: {interactiveResult.ExpiresOn.LocalDateTime}");
+    Console.WriteLine();
+
+    return interactiveResult.AccessToken;
+}
+
+// Create the Dataverse ServiceClient using the interactive token provider.
+using var client = new ServiceClient(
+    new Uri(environmentUrl),
+    GetAccessTokenAsync,
+    true);
+
 int totalChecked = 0;
 int totalIssues = 0;
 
@@ -71,21 +145,15 @@ if (results.Entities.Count > 0)
     Console.WriteLine($" Is Managed    : {isManaged}");
     Console.WriteLine($" Description   : {description}");
     Console.WriteLine("---------------------------------------------------");
-    // count solution descrip
-    gradeCounter++;
 }
 
 Console.WriteLine($"Found {results.Entities.Count} objects in solution '{targetSolutionUniqueName}':\n");
-
-gradeCounter += results.Entities.Count;
-
 Console.WriteLine();
 
 foreach (var record in results.Entities)
 {
     var optionSetValue = record.GetAttributeValue<OptionSetValue>("componenttype");
     var displayName = record.GetAttributeValue<string>("displayname");
-
 
     if (optionSetValue == null)
         continue;
@@ -144,7 +212,6 @@ foreach (var record in results.Entities)
     Guid objectId = record.GetAttributeValue<Guid>("objectid");
     Console.WriteLine("-----------------------------------------");
 
-    //ComponentTypeID: { componentTypeValue} |
     Console.ForegroundColor = ConsoleColor.DarkYellow;
     Console.WriteLine($"ComponentValue: {componentName} | Object ID: {objectId}");
     Console.ResetColor();
@@ -157,21 +224,20 @@ foreach (var record in results.Entities)
 
         string webRecName = webResources.GetAttributeValue<string>("name") ?? "None";
         string webRecDisplayName = webResources.GetAttributeValue<string>("displayname") ?? "None";
-        string webRecDesc = webResources.GetAttributeValue<string>("description") ?? "None";
+        string? rawWebRecDesc = webResources.GetAttributeValue<string>("description");
 
-        if (string.IsNullOrEmpty(webRecDesc) || webRecDesc.Contains("None", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(rawWebRecDesc))
         {
             Reports.Add(new Report
             {
                 Fix = "Add Web Resource Description",
                 LogicalName = webRecName,
                 Name = webRecDisplayName,
-                ComponentValue = "Web Resource"
+                ComponentValue = "Web Resource",
+                Severity = Severity.Warning
             });
 
-            Report.Counter++;
-             totalIssues++;
-            //var tes = 
+            totalIssues++;
         }
     }
 
@@ -191,7 +257,6 @@ foreach (var record in results.Entities)
             string appDescription = string.IsNullOrWhiteSpace(rawAppDescription) ? "None" : rawAppDescription;
             string appVersion = canvasAppMeta.GetAttributeValue<string>("appversion") ?? "None";
 
-
             if (string.IsNullOrWhiteSpace(rawAppDescription))
             {
                 Reports.Add(new Report
@@ -199,10 +264,9 @@ foreach (var record in results.Entities)
                     Name = appDisplayName,
                     LogicalName = appName,
                     ComponentValue = componentName,
-                    Fix = "Canvas App needs a description."
+                    Fix = "Canvas App needs a description.",
+                    Severity = Severity.Warning
                 });
-
-                Report.Counter++;
 
                 totalIssues++;
             }
@@ -217,6 +281,7 @@ foreach (var record in results.Entities)
             Console.WriteLine($"Error retrieving Canvas App record: {ex.Message}");
         }
     }
+
     //Model Driven App
     if (componentTypeValue == 80 || componentTypeValue == 200)
     {
@@ -225,8 +290,8 @@ foreach (var record in results.Entities)
             totalChecked++;
             Entity modelDrivenApp = client.Retrieve("appmodule", objectId, new ColumnSet(true));
 
-
-            string mdaDescription = modelDrivenApp.GetAttributeValue<string>("description") ?? "None";
+            string? rawMdaDescription = modelDrivenApp.GetAttributeValue<string>("description");
+            string mdaDescription = string.IsNullOrWhiteSpace(rawMdaDescription) ? "None" : rawMdaDescription;
             string mdaName = modelDrivenApp.GetAttributeValue<string>("name") ?? "None";
             string mdaLogicalName = modelDrivenApp.GetAttributeValue<string>("uniquename") ?? "None";
 
@@ -234,21 +299,26 @@ foreach (var record in results.Entities)
             Console.WriteLine($"Name:             {mdaName}");
             Console.WriteLine($"Description:      {mdaDescription}");
 
-            if (string.IsNullOrWhiteSpace(mdaDescription) || mdaDescription == "None")
+            if (string.IsNullOrWhiteSpace(rawMdaDescription))
             {
-                Reports.Add(new Report { Name = mdaName, LogicalName = mdaLogicalName, ComponentValue = "Model-Driven App", Fix = "Model-Driven App needs a description." });
+                Reports.Add(new Report
+                {
+                    Name = mdaName,
+                    LogicalName = mdaLogicalName,
+                    ComponentValue = componentName,
+                    Fix = "Model-Driven App needs a description.",
+                    Severity = Severity.Warning
+                });
 
-                Report.Counter++;
                 totalIssues++;
             }
-
         }
         catch (Exception ex)
         {
-
             Console.WriteLine($"Error: {ex.Message}");
         }
     }
+
     //Tables/entitiy
     if (componentTypeValue == 1)
     {
@@ -279,7 +349,6 @@ foreach (var record in results.Entities)
                 entityReport.Fix = "Table needs description.";
                 needsReporting = true;
 
-                Report.Counter++;
                 totalIssues++;
             }
 
@@ -288,6 +357,7 @@ foreach (var record in results.Entities)
             Console.WriteLine($"Description         : {entityDescription}");
             Console.WriteLine();
             Console.WriteLine("Custom Columns...");
+
             if (entityMeta.Attributes != null)
             {
                 foreach (var attr in entityMeta.Attributes)
@@ -298,13 +368,12 @@ foreach (var record in results.Entities)
                         string attrLogicalName = attr.LogicalName;
                         string attrDescription = attr.Description?.UserLocalizedLabel?.Label ?? string.Empty;
 
-                        if (string.IsNullOrEmpty(attrDescription))
+                        if (string.IsNullOrWhiteSpace(attrDescription))
                         {
                             Console.ForegroundColor = ConsoleColor.Red;
                             var columnReport = new Report { ComponentValue = "Column", Name = attrLogicalName, Fix = "Column needs description." };
                             entityReport.ColumnReport.Add(columnReport);
                             needsReporting = true;
-                            Report.Counter++;
                             totalIssues++;
                         }
                         else
@@ -334,6 +403,7 @@ foreach (var record in results.Entities)
             Console.WriteLine($"Error retrieving entity metadata: {ex.Message}");
         }
     }
+
     //connection references
     if (componentTypeValue == 10088)
     {
@@ -347,7 +417,6 @@ foreach (var record in results.Entities)
                 "connectionreferencelogicalname");
 
             Entity connRefMeta = client.Retrieve("connectionreference", objectId, connQuery);
-
 
             string connDisplayName = connRefMeta.GetAttributeValue<string>("connectionreferencedisplayname") ?? "None";
             string connectionid = connRefMeta.GetAttributeValue<string>("connectionid") ?? "None";
@@ -366,22 +435,13 @@ foreach (var record in results.Entities)
     }
 }
 
-int addAttributes = 0;
 
-foreach (var item in Reports)
-{
-    foreach (var i in item.ColumnReport)
-    {
-        addAttributes++;
-    }
-}
-
-double gradePercent = 0.0;
+double gradePercent;
 if (totalChecked > 0)
 {
     gradePercent = ((double)(totalChecked - totalIssues) / totalChecked) * 100.0;
 }
-else
+else 
 {
     gradePercent = 100.0;
 }
@@ -393,6 +453,7 @@ Console.ForegroundColor = ConsoleColor.DarkCyan;
 Console.WriteLine("************************************************************");
 Console.WriteLine($"Final Report: {totalIssues} out of {totalChecked} objects need corrections");
 Console.WriteLine($"Grade: {gradePercent:F1}%");
+
 if (hasConnRef)
 {
     Console.WriteLine("This solution contains connection references.. ");
@@ -408,131 +469,140 @@ string filepath = Path.Combine(desktop, "PDFTest.pdf");
 
 QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 
-QuestPDF.Fluent.Document.Create(container =>
+try
 {
-    container.Page(page =>
+    Console.WriteLine("Generating PDF...");
+
+    QuestPDF.Fluent.Document.Create(container =>
     {
-        page.Size(PageSizes.A4);
+        container.Page(page =>
+        {
+            page.Size(PageSizes.A4);
 
-        page.Margin(0.75f, Unit.Centimetre);
-        page.PageColor(Colors.White);
-        page.DefaultTextStyle(x => x.FontSize(12));
+            page.Margin(0.75f, Unit.Centimetre);
+            page.PageColor(Colors.White);
+            page.DefaultTextStyle(x => x.FontSize(12));
 
-        //page.Header()
-        //    .Text("Engineering Review")
-        //    .SemiBold().FontSize(18).FontColor(Colors.BlueGrey.Darken4);
-
-        page.Content()
-        .PaddingTop(0)
-            //.PaddingVertical(1, Unit.Centimetre)
-            .Column(x =>
-            {
-
-                x.Item().LineHorizontal(3f).LineColor(Colors.BlueGrey.Darken4);
-                x.Item().Text("Engineering Review").FontSize(18).Bold().FontColor(Colors.BlueGrey.Darken4);
-                x.Item().Table(meta =>
+            page.Content()
+            .PaddingTop(0)
+                .Column(x =>
                 {
-                    meta.ColumnsDefinition(c =>
+                    x.Item().LineHorizontal(3f).LineColor(Colors.BlueGrey.Darken4);
+                    x.Item().Text("Engineering Review").FontSize(18).Bold().FontColor(Colors.BlueGrey.Darken4);
+
+                    x.Item().Table(meta =>
                     {
-                        c.ConstantColumn(90);
-                        c.RelativeColumn();
-                    });
-
-                    meta.Cell().Text("Name:").FontColor(Colors.BlueGrey.Darken4);
-                    meta.Cell().Text(friendlyName).FontColor(Colors.BlueGrey.Darken4);
-
-                    meta.Cell().Text("LogicalName:").FontColor(Colors.BlueGrey.Darken4);
-                    meta.Cell().Text(targetSolutionUniqueName).FontColor(Colors.BlueGrey.Darken4);
-
-                    meta.Cell().Text("Version:").FontColor(Colors.BlueGrey.Darken4);
-                    meta.Cell().Text(version).FontColor(Colors.BlueGrey.Darken4);
-
-                    meta.Cell().Text("Description:").FontColor(Colors.BlueGrey.Darken4);
-                    meta.Cell().Text(description).FontColor(Colors.BlueGrey.Darken4);
-
-                    if (hasConnRef)
-                    {
-                        meta.Cell().Text("Connections:").FontColor(Colors.BlueGrey.Darken4);
-                        meta.Cell().Text("Solution Contains Connection references").FontColor(Colors.BlueGrey.Darken4);
-                    }
-
-                });
-                x.Item().LineHorizontal(3f).LineColor(Colors.BlueGrey.Darken4);
-
-
-
-
-
-
-                //x.Item().LineHorizontal(1f).LineColor(Colors.BlueGrey.Darken4);
-                foreach (var item in Reports)
-                {
-                    x.Item().PaddingTop(6).Border(0.55f).BorderColor(Colors.BlueGrey.Lighten2).Padding(8).Column(card =>
-                    {
-                        //card.Spacing(2);
-
-                        // Header bar
-                        card.Item().Row(row =>
+                        meta.ColumnsDefinition(c =>
                         {
-                            row.RelativeItem().Text(t =>
-                            {
-                                t.Span(item.Name).Bold().FontSize(11);
-                                t.Span($"  ({item.LogicalName})").FontSize(9).FontColor(Colors.BlueGrey.Darken4);
-                            });
-                            row.AutoItem().Background(Colors.BlueGrey.Lighten5).PaddingHorizontal(5).PaddingVertical(2)
-                                .Text(item.ComponentValue.ToUpper()).FontSize(8).SemiBold();
+                            c.ConstantColumn(90);
+                            c.RelativeColumn();
                         });
 
-                        // Table-level fix
-                        card.Item().Text($"Table status: {item.Fix}").FontSize(9).FontColor(Colors.Red.Darken4).SemiBold();
+                        meta.Cell().Text("Name:").FontColor(Colors.BlueGrey.Darken4);
+                        meta.Cell().Text(friendlyName).FontColor(Colors.BlueGrey.Darken4);
 
-                        // Columns 
-                        if (item.ColumnReport.Count > 0)
+                        meta.Cell().Text("LogicalName:").FontColor(Colors.BlueGrey.Darken4);
+                        meta.Cell().Text(targetSolutionUniqueName).FontColor(Colors.BlueGrey.Darken4);
+
+                        meta.Cell().Text("Version:").FontColor(Colors.BlueGrey.Darken4);
+                        meta.Cell().Text(version).FontColor(Colors.BlueGrey.Darken4);
+
+                        meta.Cell().Text("Description:").FontColor(Colors.BlueGrey.Darken4);
+                        meta.Cell().Text(description).FontColor(Colors.BlueGrey.Darken4);
+
+                        if (hasConnRef)
                         {
-                            card.Item().PaddingTop(2).Table(table =>
-                            {
-                                table.ColumnsDefinition(c =>
-                                {
-                                    c.RelativeColumn(2);
-                                    c.RelativeColumn(3);
-                                });
-
-                                table.Header(h =>
-                                {
-                                    h.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text("Column").SemiBold().FontSize(8);
-                                    h.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text("Action Required").SemiBold().FontSize(8);
-                                });
-
-                                foreach (var att in item.ColumnReport)
-                                {
-                                    table.Cell().BorderBottom(1).BorderColor(Colors.Black).Padding(4)
-                                        .Text(att.Name).FontSize(8.5f);
-                                    table.Cell().BorderBottom(1).BorderColor(Colors.Black).Padding(4)
-                                        .Text(att.Fix).FontSize(8.5f).FontColor(Colors.Red.Darken4);
-                                }
-                            });
+                            meta.Cell().Text("Connections:").FontColor(Colors.BlueGrey.Darken4);
+                            meta.Cell().Text("Solution Contains Connection references").FontColor(Colors.BlueGrey.Darken4);
                         }
                     });
-                }
-            });
 
-        page.Footer()
-            .AlignCenter()
-            .Text(x =>
-            {
-                x.Span("Page ").FontSize(8);
-                x.CurrentPageNumber().FontSize(8);
-            });
-    });
-})
-.GeneratePdf(filepath);
+                    x.Item().LineHorizontal(3f).LineColor(Colors.BlueGrey.Darken4);
+
+                    foreach (var item in Reports)
+                    {
+                        x.Item().PaddingTop(6).Border(0.55f).BorderColor(Colors.BlueGrey.Lighten2).Padding(8).Column(card =>
+                        {
+                            card.Item().Row(row =>
+                            {
+                                row.RelativeItem().Text(t =>
+                                {
+                                    t.Span(item.Name).Bold().FontSize(11);
+                                    t.Span($"  ({item.LogicalName})").FontSize(9).FontColor(Colors.BlueGrey.Darken4);
+                                });
+
+                                row.AutoItem().Background(Colors.BlueGrey.Lighten5).PaddingHorizontal(5).PaddingVertical(2)
+                                    .Text(item.ComponentValue.ToUpper()).FontSize(8).SemiBold();
+                            });
+
+                            card.Item().Text($"Table status: {item.Fix}").FontSize(9).FontColor(Colors.Red.Darken4).SemiBold();
+                            card.Item().Text($"Severity: {item.Severity}").FontSize(9).FontColor(Colors.Red.Darken4).SemiBold();
+
+                            if (item.ColumnReport.Count > 0)
+                            {
+                                card.Item().PaddingTop(2).Table(table =>
+                                {
+                                    table.ColumnsDefinition(c =>
+                                    {
+                                        c.RelativeColumn(2);
+                                        c.RelativeColumn(3);
+                                    });
+
+                                    table.Header(h =>
+                                    {
+                                        h.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text("Column").SemiBold().FontSize(8);
+                                        h.Cell().Background(Colors.Grey.Lighten3).Padding(4).Text("Action Required").SemiBold().FontSize(8);
+                                    });
+
+                                    foreach (var att in item.ColumnReport)
+                                    {
+                                        table.Cell().BorderBottom(1).BorderColor(Colors.Black).Padding(4)
+                                            .Text(att.Name).FontSize(8.5f);
+
+                                        table.Cell().BorderBottom(1).BorderColor(Colors.Black).Padding(4)
+                                            .Text(att.Fix).FontSize(8.5f).FontColor(Colors.Red.Darken4);
+                                    }
+                                });
+                            }
+                        });
+                    }
+                });
+
+            page.Footer()
+                .AlignCenter()
+                .Text(x =>
+                {
+                    x.Span("Page ").FontSize(8);
+                    x.CurrentPageNumber().FontSize(8);
+                });
+        });
+    })
+    .GeneratePdf(filepath);
+
+    Console.WriteLine($"PDF saved to: {filepath}");
+}
+catch (IOException ex)
+{
+    Console.ForegroundColor = ConsoleColor.Red;
+    Console.WriteLine($"Could not write PDF to '{filepath}' (file may be open or locked): {ex.Message}");
+    Console.ResetColor();
+}
 
 public class Report
 {
-    public string ComponentValue { get; set; }
-    public string Name { get; set; }
-    public string LogicalName { get; set; }
-    public string Fix { get; set; }
-    public static int Counter { get; set; } = 0;
+    public string ComponentValue { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string LogicalName { get; set; } = string.Empty;
+    public string Fix { get; set; } = string.Empty;
+    public Severity Severity { get; set; }
     public List<Report> ColumnReport { get; set; } = new List<Report>();
+}
+
+
+public enum Severity
+{
+    Error,
+    Warning,
+    Info
+
 }

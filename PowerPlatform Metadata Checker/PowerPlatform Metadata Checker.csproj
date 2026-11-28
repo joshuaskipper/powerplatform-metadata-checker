@@ -11,6 +11,8 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.PowerPlatform.Dataverse.Client" Version="1.2.27" />
     <PackageReference Include="QuestPDF" Version="2026.9.2" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="11.0.0" />
+    <PackageReference Include="System.ServiceModel.Http" Version="10.1.0" />
   </ItemGroup>
 
 </Project>
